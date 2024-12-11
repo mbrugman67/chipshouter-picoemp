@@ -10,7 +10,7 @@
 #include "trigger_basic.pio.h"
 
 static bool armed = false;
-static bool timeout_active = true;
+static bool timeout_active = false;  // no timeout by defualt!
 static bool hvp_internal = true;
 static absolute_time_t timeout_time;
 static uint offset = 0xFFFFFFFF;
@@ -81,14 +81,14 @@ void fast_trigger() {
 
 int main() {
     // Initialize USB-UART as STDIO
-    stdio_init_all();
+    //stdio_init_all();
 
     picoemp_init();
 
     // Init for reset pin (move somewhere else)
-    gpio_init(1);
-    gpio_set_dir(1, GPIO_OUT);
-    gpio_put(1, 1);
+    gpio_init(PIN_OUT_READY);
+    gpio_set_dir(PIN_OUT_READY, GPIO_OUT);
+    gpio_put(PIN_OUT_READY, 0); // ready output off at start
 
     // Run serial-console on second core
     multicore_launch_core1(serial_console);
@@ -97,106 +97,26 @@ int main() {
     pulse_power.f = PULSE_POWER_DEFAULT;
     pulse_delay_cycles = PULSE_DELAY_CYCLES_DEFAULT;
     pulse_time_cycles = PULSE_TIME_CYCLES_DEFAULT;
+    bool ready_to_fire = gpio_get(PIN_IN_CHARGED);
+    bool pio_ready = false;
+    arm();
 
     while(1) {
-        gpio_put(PIN_LED_HV, gpio_get(PIN_IN_CHARGED));
+        ready_to_fire = gpio_get(PIN_IN_CHARGED);
 
-        // Handle serial commands (if any)
-        while(multicore_fifo_rvalid()) {
-            uint32_t command = multicore_fifo_pop_blocking();
-            switch(command) {
-                case cmd_arm:
-                    arm();
-                    update_timeout();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_disarm:
-                    disarm();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_pulse:
-                    picoemp_pulse(pulse_time);
-                    update_timeout();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_status:
-                    multicore_fifo_push_blocking(return_ok);
-                    multicore_fifo_push_blocking(get_status());
-                    break;
-                case cmd_enable_timeout:
-                    timeout_active = true;
-                    update_timeout();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_disable_timeout:
-                    timeout_active = false;
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_config_pulse_delay_cycles:
-                    pulse_delay_cycles = multicore_fifo_pop_blocking();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_config_pulse_time_cycles:
-                    pulse_time_cycles = multicore_fifo_pop_blocking();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_fast_trigger:
-                    fast_trigger();
-                    multicore_fifo_push_blocking(return_ok);
-                    while(!pio_interrupt_get(pio0, 0));
-                    multicore_fifo_push_blocking(return_ok);
-                    pio_sm_set_enabled(pio0, 0, false);
-                    picoemp_configure_pulse_output();
-                    break;
-                case cmd_internal_hvp:
-                    picoemp_configure_pulse_output();
-                    hvp_internal = true;
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_external_hvp:
-                    picoemp_configure_pulse_external();
-                    hvp_internal = false;
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_config_pulse_time:
-                    pulse_time = multicore_fifo_pop_blocking();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_config_pulse_power:
-                    pulse_power.ui32 = multicore_fifo_pop_blocking();
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-                case cmd_toggle_gp1:
-                    gpio_xor_mask(1<<1);
-                    multicore_fifo_push_blocking(return_ok);
-                    break;
-            }
-        }
+        gpio_put(PIN_LED_HV, ready_to_fire);
+        gpio_put(PIN_OUT_READY, ready_to_fire);
 
-        // Pulse
-        if(gpio_get(PIN_BTN_PULSE)) {
-            update_timeout();
-            picoemp_pulse(pulse_time);
-        }
-
-        if(gpio_get(PIN_BTN_ARM)) {
-            update_timeout();
-            if(!armed) {
-                arm();
-            } else {
-                disarm();
-            }
-            // YOLO debouncing
-            while(gpio_get(PIN_BTN_ARM));
-            sleep_ms(100);
-        }
-
-        if(!gpio_get(PIN_IN_CHARGED) && armed) {
+        if(!ready_to_fire && armed) {
+            pio_ready = false;
             picoemp_enable_pwm(pulse_power.f);
         }
 
-        if(timeout_active && (get_absolute_time() > timeout_time) && armed) {
-            disarm();
+        if (ready_to_fire && !pio_ready) {
+            pio_ready = true;
+            fast_trigger();
+            while(!pio_interrupt_get(pio0, 0));
+            pio_sm_set_enabled(pio0, 0, false);
         }
     }
     
