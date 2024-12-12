@@ -1,3 +1,16 @@
+# PicoEMP auto recycle fast trigger
+This is my modification to make what is already a slightly dangerous tool and make it just a bit more so :)
+
+Essentially, the device will arm as soon as powered up, and will be in fast trigger mode.  Once it fires,
+it will automatically reset fast trigger mode.
+
+Serial comms are disabled.
+
+GPIO 0 is the "fire now" input
+GPIO 1 is the "charged and ready to fire output"
+
+
+
 # PicoEMP C firmware
 
 This is a basic firmware for Colin O'Flynn's [PicoEMP](https://picoemp.com/).
